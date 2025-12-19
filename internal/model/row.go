@@ -20,7 +20,7 @@ func NewRow() *Row {
 		IsBackForeground: 0,
 		StepType:         0,
 		Point: Point{
-			Altitude:  316,
+			Altitude:  10.0,
 			DataTime:  0,
 			Speed:     0,
 			Latitude:  0.0,

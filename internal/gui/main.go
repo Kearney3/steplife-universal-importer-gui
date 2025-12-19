@@ -21,29 +21,59 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/pkg/errors"
 	"gopkg.in/ini.v1"
 )
 
+// hiddenFileFilter 自定义文件过滤器，隐藏以点开头的文件和文件夹
+type hiddenFileFilter struct {
+	extensions []string
+}
+
+func (f *hiddenFileFilter) Matches(uri fyne.URI) bool {
+	path := uri.Path()
+	baseName := filepath.Base(path)
+
+	// 隐藏以点开头的文件和文件夹
+	if strings.HasPrefix(baseName, ".") {
+		return false
+	}
+
+	// 如果指定了扩展名，检查文件扩展名
+	if len(f.extensions) > 0 {
+		ext := strings.ToLower(filepath.Ext(path))
+		for _, allowedExt := range f.extensions {
+			if ext == strings.ToLower(allowedExt) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return true
+}
+
+func (f *hiddenFileFilter) Extensions() []string {
+	return f.extensions
+}
+
 type GUI struct {
-	app              fyne.App
-	window           fyne.Window
-	config           model.Config
-	sourceDir        string
-	outputDir        string
-	createOutputDir  bool // 是否创建output文件夹
-	isFileMode       bool // 是否为文件选择模式（true=文件，false=文件夹）
-	showLog          bool // 是否显示处理日志
-	isCreatingLayout bool // 是否正在创建布局（防止递归）
-	statusLabel      *widget.Label
-	progressBar      *widget.ProgressBar
-	logText          *widget.TextGrid
-	logScroll        *container.Scroll
-	fontRegular      fyne.Resource
-	customTheme      fyne.Theme
+	app             fyne.App
+	window          fyne.Window
+	config          model.Config
+	sourceDir       string
+	outputDir       string
+	createOutputDir bool // 是否创建output文件夹
+	isFileMode      bool // 是否为文件选择模式（true=文件，false=文件夹）
+	showLog         bool // 是否显示处理日志
+	statusLabel     *widget.Label
+	progressBar     *widget.ProgressBar
+	logText         *widget.Entry
+	logScroll       *container.Scroll
+	fontRegular     fyne.Resource
+	customTheme     fyne.Theme
 }
 
 // loadCustomFont 加载自定义字体
@@ -106,7 +136,7 @@ func NewGUI() *GUI {
 		config: model.Config{
 			EnableInsertPointStrategy: 1,
 			InsertPointDistance:       100,
-			DefaultAltitude:           316.0,
+			DefaultAltitude:           0.0,
 			SpeedMode:                 "auto",
 			ManualSpeed:               1.5,
 			EnableBatchProcessing:     1,
@@ -122,7 +152,7 @@ func NewGUI() *GUI {
 		gui.app.Settings().SetTheme(gui.customTheme)
 	}
 
-	gui.window = gui.app.NewWindow("一生足迹数据导入器")
+	gui.window = gui.app.NewWindow(fmt.Sprintf("一生足迹数据导入器 v%s", consts.Version))
 	gui.window.SetMaster()
 
 	return gui
@@ -181,17 +211,11 @@ func (g *GUI) createMainWindow() {
 	g.window.SetContent(g.createMainLayout())
 	// 设置最小窗口大小，而不是固定大小
 	g.window.SetFixedSize(false)
-	g.window.Resize(fyne.NewSize(900, 700))
+	g.window.Resize(fyne.NewSize(900, 1000))
 }
 
 // createMainLayout 创建主界面布局
 func (g *GUI) createMainLayout() fyne.CanvasObject {
-	// 防止递归调用的标志
-	if g.isCreatingLayout {
-		return container.NewVBox(widget.NewLabel("布局创建中..."))
-	}
-	g.isCreatingLayout = true
-	defer func() { g.isCreatingLayout = false }()
 	// 文件选择区域
 	sourceDirLabel := widget.NewLabel("源文件:")
 	sourceDirEntry := widget.NewEntry()
@@ -202,17 +226,7 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 	})
 
 	// 文件/文件夹选择模式
-	modeSelect := widget.NewSelect([]string{"文件夹模式", "单文件模式"}, func(selected string) {
-		g.isFileMode = (selected == "单文件模式")
-		if g.isFileMode {
-			sourceDirEntry.SetPlaceHolder("选择轨迹文件")
-			sourceDirButton.SetText("选择文件")
-		} else {
-			sourceDirEntry.SetPlaceHolder("选择包含轨迹文件的目录")
-			sourceDirButton.SetText("选择目录")
-		}
-	})
-	modeSelect.SetSelected("文件夹模式") // 默认文件夹模式
+	modeSelect := widget.NewSelect([]string{"文件夹模式", "单文件模式"}, nil)
 
 	outputDirLabel := widget.NewLabel("输出目录:")
 	outputDirEntry := widget.NewEntry()
@@ -260,34 +274,18 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 
 	// 初始化日志显示区域（只在第一次调用时）
 	if g.logText == nil {
-		g.logText = widget.NewTextGrid()
-		g.logScroll = container.NewScroll(g.logText)
-		g.logScroll.SetMinSize(fyne.NewSize(400, 200))
+		g.logText = widget.NewMultiLineEntry()
+		g.logText.Disable()                           // 设置为只读（禁用编辑）
+		g.logText.Wrapping = fyne.TextWrapWord        // 启用自动换行
+		g.logScroll = container.NewVScroll(g.logText) // 使用垂直滚动，优化滚动体验
+		// 设置最小尺寸，宽度设为0以允许随窗口宽度变化
+		g.logScroll.SetMinSize(fyne.NewSize(0, 100))
 	}
 
-	// 日志显示控制 - 动态显示/隐藏日志区域
-	showLogCheck := widget.NewCheck("显示处理日志", nil)
-	showLogCheck.SetChecked(g.showLog)
-
-	// 单独设置回调，避免在SetChecked时触发
-	showLogCheck.OnChanged = func(checked bool) {
-		// 防止递归调用
-		if g.isCreatingLayout {
-			return
-		}
-		g.showLog = checked
-		// 重新创建布局
-		newContent := g.createMainLayout()
-		g.window.SetContent(newContent)
-	}
-
-	// 只有在显示日志时才创建日志卡片
-	var logCard *widget.Card
-	if g.showLog {
-		logCard = widget.NewCard("处理日志", "",
-			g.logScroll,
-		)
-	}
+	// 创建日志卡片（始终显示）
+	logCard := widget.NewCard("处理日志", "",
+		g.logScroll,
+	)
 
 	// 文件选择区域布局
 	sourceDirContainer := container.NewBorder(
@@ -306,20 +304,11 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 		outputDirContainer,
 	)
 
-	// 状态和日志区域
+	// 状态和日志区域 - 日志区域会自动扩展填充可用空间
 	statusAndLogArea := container.NewVBox(
 		statusCard,
-	)
-	if g.showLog {
-		statusAndLogArea.Add(widget.NewSeparator())
-		statusAndLogArea.Add(logCard)
-	}
-
-	// 在状态区域顶部添加日志显示开关
-	statusCardWithControl := container.NewVBox(
-		container.NewHBox(widget.NewLabel("状态控制:"), layout.NewSpacer(), showLogCheck),
 		widget.NewSeparator(),
-		statusAndLogArea,
+		logCard,
 	)
 
 	fileSelectionArea := container.NewVBox(
@@ -331,12 +320,12 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 	scrollableContent := container.NewVBox(
 		fileSelectionArea,
 		paramsCard,
-		statusCardWithControl,
+		statusAndLogArea,
 	)
 
-	// 添加滚动容器
-	scrollContainer := container.NewScroll(scrollableContent)
-	scrollContainer.SetMinSize(fyne.NewSize(800, 500)) // 设置最小滚动区域大小
+	// 添加滚动容器 - 使用垂直滚动，优化滚动体验
+	scrollContainer := container.NewVScroll(scrollableContent)
+	scrollContainer.SetMinSize(fyne.NewSize(800, 600)) // 设置最小滚动区域大小
 
 	// 操作按钮（始终可见，位于底部）
 	processButton := widget.NewButtonWithIcon("开始处理", theme.MediaPlayIcon(), func() {
@@ -362,6 +351,46 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 	)
 	// 设置最小高度，确保按钮区域可见
 	buttonContainer.Resize(fyne.NewSize(buttonContainer.MinSize().Width, 50))
+
+	// 设置模式选择的回调函数（现在所有变量都已定义）
+	modeSelect.OnChanged = func(selected string) {
+		previousMode := g.isFileMode
+		g.isFileMode = (selected == "单文件模式")
+
+		// 检查当前选择是否与新模式兼容
+		if g.sourceDir != "" {
+			fileInfo, err := os.Stat(g.sourceDir)
+			if err == nil {
+				isDir := fileInfo.IsDir()
+
+				// 如果从文件夹模式切换到单文件模式，且当前选择了文件夹
+				if !previousMode && g.isFileMode && isDir {
+					g.addLog("模式切换：检测到当前选择了文件夹，但单文件模式需要选择具体文件")
+					dialog.ShowInformation("模式切换提示",
+						"您当前选择了文件夹，但单文件模式需要选择具体的轨迹文件。\n请重新选择文件。",
+						g.window)
+					// 清除当前选择
+					sourceDirEntry.SetText("")
+					g.sourceDir = ""
+					outputDirEntry.SetText("")
+					g.outputDir = ""
+				} else if previousMode && !g.isFileMode && !isDir {
+					// 从单文件模式切换到文件夹模式，且当前选择了文件
+					g.addLog("模式切换：从单文件模式切换到文件夹模式")
+				}
+			}
+		}
+
+		// 更新UI显示
+		if g.isFileMode {
+			sourceDirEntry.SetPlaceHolder("选择轨迹文件")
+			sourceDirButton.SetText("选择文件")
+		} else {
+			sourceDirEntry.SetPlaceHolder("选择包含轨迹文件的目录")
+			sourceDirButton.SetText("选择目录")
+		}
+	}
+	modeSelect.SetSelected("文件夹模式") // 默认文件夹模式
 
 	// 整体布局：滚动内容在上，按钮固定在底部
 	return container.NewBorder(
@@ -516,7 +545,9 @@ func (g *GUI) selectSource(entry *widget.Entry) {
 			// 自动更新输出目录
 			g.updateOutputDir(path, nil)
 		}, g.window)
-		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".gpx", ".kml", ".ovjsn"}))
+		// 使用自定义过滤器，隐藏以点开头的文件
+		fileFilter := &hiddenFileFilter{extensions: []string{".gpx", ".kml", ".ovjsn"}}
+		fileDialog.SetFilter(fileFilter)
 		fileDialog.Show()
 	} else {
 		// 文件夹模式
@@ -525,6 +556,15 @@ func (g *GUI) selectSource(entry *widget.Entry) {
 				return
 			}
 			path := uri.Path()
+
+			// 检查是否为隐藏文件夹（以点开头）
+			baseName := filepath.Base(path)
+			if strings.HasPrefix(baseName, ".") {
+				g.addLog(fmt.Sprintf("跳过隐藏文件夹: %s", path))
+				dialog.ShowInformation("提示", "不能选择隐藏文件夹（以点开头的文件夹）", g.window)
+				return
+			}
+
 			g.addLog(fmt.Sprintf("选择文件夹 - URI: %s, Path: %s", uri.String(), path))
 
 			// 验证路径是否存在
@@ -578,6 +618,15 @@ func (g *GUI) selectOutputDirectory(entry *widget.Entry) {
 			return
 		}
 		path := uri.Path()
+
+		// 检查是否为隐藏文件夹（以点开头）
+		baseName := filepath.Base(path)
+		if strings.HasPrefix(baseName, ".") {
+			g.addLog(fmt.Sprintf("跳过隐藏文件夹: %s", path))
+			dialog.ShowInformation("提示", "不能选择隐藏文件夹（以点开头的文件夹）", g.window)
+			return
+		}
+
 		entry.SetText(path)
 		g.outputDir = path
 	}, g.window)
@@ -1060,10 +1109,9 @@ func (g *GUI) addLog(message string) {
 	timestamp := time.Now().Format("15:04:05")
 	logLine := fmt.Sprintf("[%s] %s\n", timestamp, message)
 
-	// 获取当前文本并追加新内容
-	currentText := g.logText.Text()
+	// 追加新内容到日志
+	currentText := g.logText.Text
 	newText := currentText + logLine
-
 	g.logText.SetText(newText)
 
 	// 自动滚动到底部
