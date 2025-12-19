@@ -1,0 +1,199 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送以 v 开头的标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows
+          - os: windows-latest
+            arch: amd64
+            goos: windows
+            goarch: amd64
+            output: steplife-importer-windows-amd64.exe
+          - os: windows-latest
+            arch: arm64
+            goos: windows
+            goarch: arm64
+            output: steplife-importer-windows-arm64.exe
+          # macOS
+          - os: macos-latest
+            arch: amd64
+            goos: darwin
+            goarch: amd64
+            output: steplife-importer-darwin-amd64
+          - os: macos-latest
+            arch: arm64
+            goos: darwin
+            goarch: arm64
+            output: steplife-importer-darwin-arm64
+          # Linux
+          - os: ubuntu-latest
+            arch: amd64
+            goos: linux
+            goarch: amd64
+            output: steplife-importer-linux-amd64
+          - os: ubuntu-latest
+            arch: arm64
+            goos: linux
+            goarch: arm64
+            output: steplife-importer-linux-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.output }} ./cmd
+          ls -lh ${{ matrix.output }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.output }}
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          
+          # 为每个平台创建包含资源文件的压缩包
+          for artifact_dir in ./artifacts/*/; do
+            # 获取平台和架构信息
+            platform_arch=$(basename "$artifact_dir")
+            
+            # 查找可执行文件
+            exe_file=$(find "$artifact_dir" -type f \( -perm -111 -o -name "*.exe" \) | head -1)
+            if [[ -z "$exe_file" ]]; then
+              echo "未找到可执行文件在 $artifact_dir"
+              continue
+            fi
+            
+            exe_name=$(basename "$exe_file")
+            
+            # 确定包名和格式
+            if [[ "$exe_name" == *.exe ]]; then
+              # Windows
+              package_name="${exe_name%.exe}"
+              package_format="zip"
+            else
+              # Linux/macOS
+              package_name="$exe_name"
+              package_format="tar.gz"
+            fi
+            
+            # 创建临时目录并复制文件
+            temp_dir="release/${package_name}"
+            mkdir -p "$temp_dir"
+            
+            # 复制可执行文件
+            cp "$exe_file" "$temp_dir/"
+            
+            # 复制资源文件
+            if [[ -d "./resource" ]]; then
+              cp -r ./resource "$temp_dir/"
+            fi
+            
+            # 复制文档文件
+            [[ -f "./README.md" ]] && cp ./README.md "$temp_dir/"
+            [[ -f "./LICENSE" ]] && cp ./LICENSE "$temp_dir/"
+            
+            # 创建压缩包
+            cd release
+            if [[ "$package_format" == "zip" ]]; then
+              zip -r "${package_name}.zip" "$(basename "$temp_dir")"
+            else
+              tar -czf "${package_name}.tar.gz" "$(basename "$temp_dir")"
+            fi
+            cd ..
+            
+            # 清理临时目录
+            rm -rf "$temp_dir"
+          done
+          
+          echo "生成的发布包："
+          ls -lh release/
+
+      - name: Extract version from tag
+        id: tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./release/*
+          name: Release ${{ steps.tag.outputs.version }}
+          body: |
+            ## 一生足迹数据导入器 ${{ steps.tag.outputs.version }}
+
+            ### 下载说明
+
+            请根据您的操作系统和架构选择合适的文件下载：
+
+            - **Windows**: `steplife-importer-windows-*.zip`
+            - **macOS**: `steplife-importer-darwin-*.tar.gz`
+            - **Linux**: `steplife-importer-linux-*.tar.gz`
+
+            ### 使用说明
+
+            1. 解压下载的文件
+            2. 运行可执行文件
+            3. 详细使用说明请参考 [README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
+
+            ### 变更日志
+
+            查看 [提交历史](https://github.com/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.ref }}) 了解详细变更。
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
