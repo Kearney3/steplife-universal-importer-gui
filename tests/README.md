@@ -160,3 +160,5 @@ dataTime,locType,longitude,latitude,heading,accuracy,speed,distance,isBackForegr
 2. 查看日志文件（如果有）
 3. 提交Issue到GitHub项目
 
+
+

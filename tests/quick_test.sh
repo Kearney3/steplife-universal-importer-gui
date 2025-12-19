@@ -69,3 +69,5 @@ echo "  - 运行 '../main' 启动GUI界面进行可视化测试"
 echo "  - 查看 ./TEST_README.md 获取详细测试指南"
 echo "  - 使用 ./test_data/ 目录中的文件进行更多测试"
 
+
+

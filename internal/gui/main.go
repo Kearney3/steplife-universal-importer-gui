@@ -29,19 +29,21 @@ import (
 )
 
 type GUI struct {
-	app             fyne.App
-	window          fyne.Window
-	config          model.Config
-	sourceDir       string
-	outputDir       string
-	createOutputDir bool // 是否创建output文件夹
-	isFileMode      bool // 是否为文件选择模式（true=文件，false=文件夹）
-	statusLabel     *widget.Label
-	progressBar     *widget.ProgressBar
-	logText         *widget.TextGrid
-	logScroll       *container.Scroll
-	fontRegular     fyne.Resource
-	customTheme     fyne.Theme
+	app              fyne.App
+	window           fyne.Window
+	config           model.Config
+	sourceDir        string
+	outputDir        string
+	createOutputDir  bool // 是否创建output文件夹
+	isFileMode       bool // 是否为文件选择模式（true=文件，false=文件夹）
+	showLog          bool // 是否显示处理日志
+	isCreatingLayout bool // 是否正在创建布局（防止递归）
+	statusLabel      *widget.Label
+	progressBar      *widget.ProgressBar
+	logText          *widget.TextGrid
+	logScroll        *container.Scroll
+	fontRegular      fyne.Resource
+	customTheme      fyne.Theme
 }
 
 // loadCustomFont 加载自定义字体
@@ -100,6 +102,7 @@ func NewGUI() *GUI {
 		app:             app.New(),
 		createOutputDir: true,  // 默认创建output文件夹
 		isFileMode:      false, // 默认文件夹模式
+		showLog:         true,  // 默认显示日志
 		config: model.Config{
 			EnableInsertPointStrategy: 1,
 			InsertPointDistance:       100,
@@ -183,6 +186,12 @@ func (g *GUI) createMainWindow() {
 
 // createMainLayout 创建主界面布局
 func (g *GUI) createMainLayout() fyne.CanvasObject {
+	// 防止递归调用的标志
+	if g.isCreatingLayout {
+		return container.NewVBox(widget.NewLabel("布局创建中..."))
+	}
+	g.isCreatingLayout = true
+	defer func() { g.isCreatingLayout = false }()
 	// 文件选择区域
 	sourceDirLabel := widget.NewLabel("源文件:")
 	sourceDirEntry := widget.NewEntry()
@@ -249,31 +258,36 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 		),
 	)
 
-	// 日志显示区域
-	g.logText = widget.NewTextGrid()
-	g.logScroll = container.NewScroll(g.logText)
-	g.logScroll.SetMinSize(fyne.NewSize(400, 200))
+	// 初始化日志显示区域（只在第一次调用时）
+	if g.logText == nil {
+		g.logText = widget.NewTextGrid()
+		g.logScroll = container.NewScroll(g.logText)
+		g.logScroll.SetMinSize(fyne.NewSize(400, 200))
+	}
 
-	logCard := widget.NewCard("处理日志", "",
-		g.logScroll,
-	)
+	// 日志显示控制 - 动态显示/隐藏日志区域
+	showLogCheck := widget.NewCheck("显示处理日志", nil)
+	showLogCheck.SetChecked(g.showLog)
 
-	// 操作按钮
-	processButton := widget.NewButtonWithIcon("开始处理", theme.MediaPlayIcon(), func() {
-		g.startProcessing(sourceDirEntry.Text, outputDirEntry.Text)
-	})
-	processButton.Importance = widget.HighImportance
+	// 单独设置回调，避免在SetChecked时触发
+	showLogCheck.OnChanged = func(checked bool) {
+		// 防止递归调用
+		if g.isCreatingLayout {
+			return
+		}
+		g.showLog = checked
+		// 重新创建布局
+		newContent := g.createMainLayout()
+		g.window.SetContent(newContent)
+	}
 
-	saveConfigButton := widget.NewButtonWithIcon("保存配置", theme.DocumentSaveIcon(), func() {
-		g.saveConfigDialog()
-	})
-
-	buttons := container.NewHBox(
-		layout.NewSpacer(),
-		processButton,
-		saveConfigButton,
-		layout.NewSpacer(),
-	)
+	// 只有在显示日志时才创建日志卡片
+	var logCard *widget.Card
+	if g.showLog {
+		logCard = widget.NewCard("处理日志", "",
+			g.logScroll,
+		)
+	}
 
 	// 文件选择区域布局
 	sourceDirContainer := container.NewBorder(
@@ -292,25 +306,71 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 		outputDirContainer,
 	)
 
+	// 状态和日志区域
+	statusAndLogArea := container.NewVBox(
+		statusCard,
+	)
+	if g.showLog {
+		statusAndLogArea.Add(widget.NewSeparator())
+		statusAndLogArea.Add(logCard)
+	}
+
+	// 在状态区域顶部添加日志显示开关
+	statusCardWithControl := container.NewVBox(
+		container.NewHBox(widget.NewLabel("状态控制:"), layout.NewSpacer(), showLogCheck),
+		widget.NewSeparator(),
+		statusAndLogArea,
+	)
+
 	fileSelectionArea := container.NewVBox(
 		sourceDirRow,
 		outputDirRow,
 	)
 
-	// 主内容区域
-	mainContent := container.NewVBox(
+	// 可滚动的主内容区域（不包含按钮）
+	scrollableContent := container.NewVBox(
 		fileSelectionArea,
 		paramsCard,
-		statusCard,
-		logCard,
-		buttons,
+		statusCardWithControl,
 	)
 
-	// 添加滚动容器以支持窗口大小调整
-	scrollContainer := container.NewScroll(mainContent)
-	scrollContainer.SetMinSize(fyne.NewSize(800, 600)) // 设置最小滚动区域大小
+	// 添加滚动容器
+	scrollContainer := container.NewScroll(scrollableContent)
+	scrollContainer.SetMinSize(fyne.NewSize(800, 500)) // 设置最小滚动区域大小
 
-	return scrollContainer
+	// 操作按钮（始终可见，位于底部）
+	processButton := widget.NewButtonWithIcon("开始处理", theme.MediaPlayIcon(), func() {
+		g.startProcessing(sourceDirEntry.Text, outputDirEntry.Text)
+	})
+	processButton.Importance = widget.HighImportance
+
+	saveConfigButton := widget.NewButtonWithIcon("保存配置", theme.DocumentSaveIcon(), func() {
+		g.saveConfigDialog()
+	})
+
+	buttons := container.NewHBox(
+		layout.NewSpacer(),
+		processButton,
+		saveConfigButton,
+		layout.NewSpacer(),
+	)
+
+	// 按钮容器，紧凑布局
+	buttonContainer := container.NewVBox(
+		widget.NewSeparator(),
+		container.NewPadded(buttons), // 给按钮添加内边距
+	)
+	// 设置最小高度，确保按钮区域可见
+	buttonContainer.Resize(fyne.NewSize(buttonContainer.MinSize().Width, 50))
+
+	// 整体布局：滚动内容在上，按钮固定在底部
+	return container.NewBorder(
+		nil,             // 顶部无内容
+		buttonContainer, // 按钮区域固定在底部，有固定高度
+		nil,             // 左侧无内容
+		nil,             // 右侧无内容
+		scrollContainer, // 主要内容区域可滚动
+	)
 }
 
 // createTimeSettings 创建时间设置组件
