@@ -21,12 +21,12 @@ echo "✅ 找到可执行文件：$PROJECT_ROOT/main"
 echo
 
 # 检查测试数据
-if [ ! -d "./test_data" ]; then
-    echo "错误：找不到测试数据目录 test_data"
+if [ ! -d "$PROJECT_ROOT/tests/test_data" ]; then
+    echo "错误：找不到测试数据目录 $PROJECT_ROOT/tests/test_data"
     exit 1
 fi
 
-echo "✅ 找到测试数据目录：test_data"
+echo "✅ 找到测试数据目录：$PROJECT_ROOT/tests/test_data"
 echo
 
 # 检查配置文件
@@ -77,17 +77,19 @@ echo "=== 测试完成 ==="
 echo
 
 # 检查输出结果
-if [ -d "./output" ] && [ "$(ls -A output)" ]; then
+if [ -f "$PROJECT_ROOT/output.csv" ]; then
     echo "✅ 输出文件生成成功："
-    ls -la output/
+    ls -la "$PROJECT_ROOT/output.csv"
+    # 复制到tests目录便于验证
+    cp "$PROJECT_ROOT/output.csv" "./output/"
 else
-    echo "❌ 未找到输出文件"
+    echo "❌ 未找到输出文件 $PROJECT_ROOT/output.csv"
 fi
 
 echo
 echo "📋 测试文件位置："
 echo "  测试数据: ./test_data/"
-echo "  输出文件: ./output/"
+echo "  输出文件: $PROJECT_ROOT/output.csv"
 
 # 恢复原始配置
 mv "$PROJECT_ROOT/config.ini.backup" "$PROJECT_ROOT/config.ini"
