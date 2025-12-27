@@ -7,8 +7,8 @@ on:
   workflow_dispatch:  # 允许手动触发工作流
 
 jobs:
-  build-linux-windows:
-    name: Build Linux and Windows
+  build-linux:
+    name: Build Linux
     runs-on: ubuntu-latest
     permissions:
       contents: write  # 需要权限来创建 release 和上传文件
@@ -20,8 +20,6 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
-          - goos: windows
-            goarch: amd64
     
     steps:
       - name: Checkout code
@@ -170,36 +168,22 @@ jobs:
           echo "OUTPUT_FILE=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
       
       - name: Build (native build)
-        if: matrix.goos != 'linux' || matrix.goarch != 'arm64'
+        if: matrix.goarch != 'arm64'
         id: build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
         run: |
           # 动态生成输出文件名（基于模块名）
           EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
           OUTPUT_FILE="${EXECUTABLE_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          
-          # Windows 平台添加 .exe 扩展名
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            OUTPUT_FILE="${OUTPUT_FILE}.exe"
-          fi
-          
-          # 为 Linux 构建设置 CGO
-          if [ "${{ matrix.goos }}" == "linux" ]; then
-            export CGO_ENABLED=1
-          fi
           
           # 构建
           go build -tags=embed_font -trimpath -ldflags="-s -w" -o "${OUTPUT_FILE}" ./cmd
           
           # 将输出文件名保存为步骤输出，供后续步骤使用
           echo "OUTPUT_FILE=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
-          
-          # 清理资源文件（如果存在）
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            rm -f rsrc_windows_*.syso 2>/dev/null || true
-          fi
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -208,9 +192,9 @@ jobs:
           path: ${{ steps.build_docker.outputs.OUTPUT_FILE || steps.build.outputs.OUTPUT_FILE }}
           retention-days: 1
   
-  build-windows-arm64:
-    name: Build Windows ARM64
-    runs-on: windows-11-arm
+  build-windows-amd64:
+    name: Build Windows AMD64
+    runs-on: windows-latest
     permissions:
       contents: write  # 需要权限来创建 release 和上传文件
     
@@ -270,10 +254,10 @@ jobs:
             go install github.com/akavel/rsrc@latest
             
             # 生成资源文件
-            rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_arm64.syso
+            rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_amd64.syso
             
-            if [ -f "rsrc_windows_arm64.syso" ]; then
-              echo "Windows icon resource file created: rsrc_windows_arm64.syso"
+            if [ -f "rsrc_windows_amd64.syso" ]; then
+              echo "Windows icon resource file created: rsrc_windows_amd64.syso"
             else
               echo "Warning: Failed to create resource file"
             fi
@@ -286,12 +270,12 @@ jobs:
         shell: bash
         env:
           GOOS: windows
-          GOARCH: arm64
+          GOARCH: amd64
           CGO_ENABLED: 1
         run: |
           # 动态生成输出文件名（基于模块名）
           EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
-          OUTPUT_FILE="${EXECUTABLE_NAME}-windows-arm64.exe"
+          OUTPUT_FILE="${EXECUTABLE_NAME}-windows-amd64.exe"
           
           # 构建
           go build -tags=embed_font -trimpath -ldflags="-s -w" -o "${OUTPUT_FILE}" ./cmd
@@ -452,7 +436,7 @@ jobs:
   
   release:
     name: Create Release
-    needs: [build-linux-windows, build-windows-arm64, build-macos]
+    needs: [build-linux, build-windows-amd64, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -497,7 +481,6 @@ jobs:
           
           # 生成文件名
           WIN_AMD64="${EXECUTABLE_NAME}-windows-amd64.exe"
-          WIN_ARM64="${EXECUTABLE_NAME}-windows-arm64.exe"
           MACOS_AMD64="${APP_NAME}-amd64.app"
           MACOS_ARM64="${APP_NAME}-arm64.app"
           LINUX_AMD64="${EXECUTABLE_NAME}-linux-amd64"
@@ -511,7 +494,6 @@ jobs:
           | 平台 | 架构 | 文件名 | 使用方法 |
           |------|------|--------|---------|
           | Windows | amd64 | \`${WIN_AMD64}\` | 双击运行，首次需允许权限 |
-          | Windows | arm64 | \`${WIN_ARM64}\` | 双击运行，首次需允许权限 |
           | macOS | amd64 | \`${MACOS_AMD64}\` | 双击打开，首次需在系统设置中允许 |
           | macOS | arm64 | \`${MACOS_ARM64}\` | 双击打开，首次需在系统设置中允许 |
           | Linux | amd64 | \`${LINUX_AMD64}\` | \`chmod +x\` 后运行，GUI 模式默认，CLI 模式加 \`--cli\` |
