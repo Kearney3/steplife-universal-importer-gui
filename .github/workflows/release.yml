@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-#    tags:
-#      - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
+   tags:
+     - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
   workflow_dispatch:  # 允许手动触发工作流
 
 jobs:
@@ -31,44 +31,19 @@ jobs:
           go-version: '1.24.2'
       
       - name: Install Linux dependencies
-        if: matrix.goos == 'linux'
+        if: matrix.goos == 'linux' && matrix.goarch != 'arm64'
         run: |
           sudo apt-get update
           
-          # 安装构建依赖（根据架构动态安装）
-          if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            # 对于 ARM64，使用 qemu 用户空间模拟和多架构支持
-            sudo apt-get install -y \
-              qemu-user-static \
-              qemu-user \
-              binfmt-support
-            
-            # 添加 ARM64 架构支持
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            
-            # 安装 ARM64 架构的开发库和交叉编译工具链
-            sudo apt-get install -y \
-              libgl1-mesa-dev:arm64 \
-              libx11-dev:arm64 \
-              libxrandr-dev:arm64 \
-              libxinerama-dev:arm64 \
-              libxcursor-dev:arm64 \
-              libxi-dev:arm64 \
-              pkg-config \
-              gcc-aarch64-linux-gnu \
-              g++-aarch64-linux-gnu
-          else
-            # 对于 amd64，安装标准库
-            sudo apt-get install -y \
-              libgl1-mesa-dev \
-              libx11-dev \
-              libxrandr-dev \
-              libxinerama-dev \
-              libxcursor-dev \
-              libxi-dev \
-              pkg-config
-          fi
+          # 对于 amd64，安装标准库
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            pkg-config
       
       - name: Extract app info
         id: app_info
@@ -193,7 +168,7 @@ jobs:
           retention-days: 1
   
   build-windows-amd64:
-    name: Build Windows AMD64
+    name: Build Windows(amd64)
     runs-on: windows-latest
     permissions:
       contents: write  # 需要权限来创建 release 和上传文件
