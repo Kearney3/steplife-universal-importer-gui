@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"path"
@@ -127,18 +126,19 @@ func ProcessSingleFile(fileType, filePath, csvFilePath string, config model.Conf
 func processOneFile(fileType, filePath string, config model.Config) (*model.StepLife, error) {
 	var adaptor parser.FileAdaptor
 
-	if fileType == consts.FileTypeCommon {
+	switch fileType {
+	case consts.FileTypeCommon:
 		adaptor = parser.CreateAdaptor(path.Ext(filePath))
-	} else if fileType == consts.FileTypeVariFlight {
-		logx.ErrorF("飞常准数据后续支持......")
+	case consts.FileTypeVariFlight:
+		logx.ErrorF("飞常准数据暂不支持......")
 		return nil, nil
-	} else {
+	default:
 		logx.ErrorF("不支持的文件类型：%s", fileType)
-		return nil, errors.New(fmt.Sprintf("不支持的文件类型：%s", fileType))
+		return nil, fmt.Errorf("不支持的文件类型：%s", fileType)
 	}
 
 	if adaptor == nil {
-		return nil, errors.New(fmt.Sprintf("不支持的结构解析（%s）", fileType))
+		return nil, fmt.Errorf("不支持的结构解析（%s）", fileType)
 	}
 
 	content, err := utils.ReadFile(filePath)
@@ -322,19 +322,20 @@ func parseOne(fileType, filePath string, config model.Config) (*model.StepLife, 
 
 	var adaptor parser.FileAdaptor
 
-	if fileType == consts.FileTypeCommon {
+	switch fileType {
+	case consts.FileTypeCommon:
 		adaptor = parser.CreateAdaptor(path.Ext(filePath))
-	} else if fileType == consts.FileTypeVariFlight {
+	case consts.FileTypeVariFlight:
 		// TODO
 		logx.ErrorF("飞常准数据后续支持......")
 		return nil, nil
-	} else {
+	default:
 		logx.ErrorF("不支持的文件类型：%s", fileType)
-		return nil, errors.New(fmt.Sprintf("不支持的文件类型：%s", fileType))
+		return nil, fmt.Errorf("不支持的文件类型：%s", fileType)
 	}
 
 	if adaptor == nil {
-		return nil, errors.New(fmt.Sprintf("不支持的结构解析（%s）", fileType))
+		return nil, fmt.Errorf("不支持的结构解析（%s）", fileType)
 	}
 
 	content, err := utils.ReadFile(filePath)

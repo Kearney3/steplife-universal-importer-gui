@@ -537,20 +537,6 @@ func (g *GUI) createAltitudeSettings() fyne.CanvasObject {
 
 // createSpeedSettings 创建速度设置组件
 func (g *GUI) createSpeedSettings() fyne.CanvasObject {
-	speedModeSelect := widget.NewSelect([]string{"自动计算", "手动指定"}, func(selected string) {
-		if selected == "自动计算" {
-			g.config.SpeedMode = "auto"
-		} else {
-			g.config.SpeedMode = "manual"
-		}
-	})
-
-	if g.config.SpeedMode == "auto" {
-		speedModeSelect.SetSelected("自动计算")
-	} else {
-		speedModeSelect.SetSelected("手动指定")
-	}
-
 	speedEntry := widget.NewEntry()
 	speedEntry.SetPlaceHolder("手动指定速度(m/s)")
 	speedEntry.SetText(fmt.Sprintf("%.2f", g.config.ManualSpeed))
@@ -559,6 +545,29 @@ func (g *GUI) createSpeedSettings() fyne.CanvasObject {
 		if val, err := strconv.ParseFloat(text, 64); err == nil {
 			g.config.ManualSpeed = val
 		}
+	}
+
+	// 根据当前速度模式设置输入框的启用状态
+	isManualMode := g.config.SpeedMode == "manual"
+	speedEntry.SetText(fmt.Sprintf("%.2f", g.config.ManualSpeed))
+	if !isManualMode {
+		speedEntry.Disable() // 自动计算模式时禁用输入框
+	}
+
+	speedModeSelect := widget.NewSelect([]string{"自动计算", "手动指定"}, func(selected string) {
+		if selected == "自动计算" {
+			g.config.SpeedMode = "auto"
+			speedEntry.Disable() // 禁用输入框
+		} else {
+			g.config.SpeedMode = "manual"
+			speedEntry.Enable() // 启用输入框
+		}
+	})
+
+	if g.config.SpeedMode == "auto" {
+		speedModeSelect.SetSelected("自动计算")
+	} else {
+		speedModeSelect.SetSelected("手动指定")
 	}
 
 	return container.NewVBox(
@@ -572,15 +581,6 @@ func (g *GUI) createSpeedSettings() fyne.CanvasObject {
 
 // createInsertPointSettings 创建插点设置组件
 func (g *GUI) createInsertPointSettings() fyne.CanvasObject {
-	enableInsertCheck := widget.NewCheck("启用轨迹插点", func(checked bool) {
-		if checked {
-			g.config.EnableInsertPointStrategy = 1
-		} else {
-			g.config.EnableInsertPointStrategy = 0
-		}
-	})
-	enableInsertCheck.SetChecked(g.config.EnableInsertPointStrategy == 1)
-
 	distanceEntry := widget.NewEntry()
 	distanceEntry.SetPlaceHolder("插点距离阈值(米)")
 	distanceEntry.SetText(fmt.Sprintf("%d", g.config.InsertPointDistance))
@@ -590,6 +590,24 @@ func (g *GUI) createInsertPointSettings() fyne.CanvasObject {
 			g.config.InsertPointDistance = val
 		}
 	}
+
+	// 根据当前插点策略设置输入框的启用状态
+	isInsertEnabled := g.config.EnableInsertPointStrategy == 1
+	distanceEntry.SetText(fmt.Sprintf("%d", g.config.InsertPointDistance))
+	if !isInsertEnabled {
+		distanceEntry.Disable() // 未启用插点时禁用输入框
+	}
+
+	enableInsertCheck := widget.NewCheck("启用轨迹插点", func(checked bool) {
+		if checked {
+			g.config.EnableInsertPointStrategy = 1
+			distanceEntry.Enable() // 启用输入框
+		} else {
+			g.config.EnableInsertPointStrategy = 0
+			distanceEntry.Disable() // 禁用输入框
+		}
+	})
+	enableInsertCheck.SetChecked(g.config.EnableInsertPointStrategy == 1)
 
 	return container.NewVBox(
 		enableInsertCheck,
