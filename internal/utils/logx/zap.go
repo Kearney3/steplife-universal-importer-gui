@@ -1,18 +1,32 @@
 package logx
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"os"
-	"time"
 )
 
 var sugar *zap.SugaredLogger
+var guiLogCallback func(string) // GUI日志回调函数
+var guiLogMutex sync.Mutex      // 保护GUI日志回调的互斥锁
 
 func init() {
 	NewLogger()
 	//log.Println("zap log init success")
+}
+
+// SetGUILogger 设置GUI日志回调函数
+func SetGUILogger(callback func(string)) {
+	guiLogMutex.Lock()
+	defer guiLogMutex.Unlock()
+	guiLogCallback = callback
 }
 
 func NewLogger() {
@@ -22,7 +36,51 @@ func NewLogger() {
 	callerSkip := zap.AddCallerSkip(1)
 	// 构造日志
 	sugar = zap.New(core, caller, callerSkip).Sugar()
-	return
+}
+
+// guiLogWriter 实现zapcore.WriteSyncer接口，将日志转发到GUI
+type guiLogWriter struct{}
+
+func (w *guiLogWriter) Write(p []byte) (n int, err error) {
+	guiLogMutex.Lock()
+	callback := guiLogCallback
+	guiLogMutex.Unlock()
+
+	if callback != nil {
+		// 解析JSON日志，提取消息
+		var logEntry map[string]interface{}
+		if err := json.Unmarshal(p, &logEntry); err == nil {
+			// 提取关键信息
+			level := ""
+			message := ""
+			caller := ""
+
+			if l, ok := logEntry["level"].(string); ok {
+				level = l
+			}
+			if m, ok := logEntry["message"].(string); ok {
+				message = m
+			}
+			if c, ok := logEntry["caller"].(string); ok {
+				caller = c
+			}
+
+			// 格式化日志消息
+			if caller != "" {
+				callback(fmt.Sprintf("[%s] %s (%s)", level, message, caller))
+			} else {
+				callback(fmt.Sprintf("[%s] %s", level, message))
+			}
+		} else {
+			// 如果不是JSON格式，直接使用原始内容
+			callback(string(bytes.TrimSpace(p)))
+		}
+	}
+	return len(p), nil
+}
+
+func (w *guiLogWriter) Sync() error {
+	return nil
 }
 
 func newCore(level zapcore.Level) zapcore.Core {
@@ -53,10 +111,18 @@ func newCore(level zapcore.Level) zapcore.Core {
 		EncodeCaller:   zapcore.ShortCallerEncoder,    // 日志文件信息（包/文件.go:行号）
 		EncodeName:     zapcore.FullNameEncoder,
 	}
+
+	// 创建写入器列表（总是包含GUI写入器，内部会检查回调是否存在）
+	writers := []zapcore.WriteSyncer{
+		zapcore.AddSync(os.Stdout),
+		zapcore.AddSync(&hook),
+		&guiLogWriter{}, // GUI日志写入器（内部会检查回调是否存在）
+	}
+
 	return zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderConfig),                                           // 编码器配置
-		zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stdout), zapcore.AddSync(&hook)), // 打印到控制台(os.Stdout)和文件(&hook)
-		atomicLevel, // 日志级别
+		zapcore.NewJSONEncoder(encoderConfig),   // 编码器配置
+		zapcore.NewMultiWriteSyncer(writers...), // 打印到控制台、文件和GUI
+		atomicLevel,                             // 日志级别
 	)
 }
 

@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math"
 	"path"
-	"time"
 	consts "steplife-universal-importer/internal/const"
 	"steplife-universal-importer/internal/model"
 	"steplife-universal-importer/internal/parser"
 	"steplife-universal-importer/internal/utils"
 	"steplife-universal-importer/internal/utils/logx"
 	"steplife-universal-importer/internal/utils/pointcalc"
+	"time"
 )
 
 // Run
@@ -21,8 +21,8 @@ import (
 func Run(config model.Config) error {
 	// 尝试多个可能的source_data目录位置
 	sourceDataPaths := []string{
-		"./source_data",     // 当前目录
-		"../source_data",    // 父目录（从tests目录运行时）
+		"./source_data",  // 当前目录
+		"../source_data", // 父目录（从tests目录运行时）
 	}
 
 	var directory string
@@ -166,47 +166,100 @@ func convertToStepLifeWithAdvancedOptions(config model.Config, points []model.Po
 	sl := model.NewStepLife()
 	logx.Info("处理经纬度坐标（高级模式）")
 
+	startTimestamp := config.PathStartTimestamp
+	if startTimestamp == 0 {
+		startTimestamp = time.Now().Unix()
+	}
+
+	// 如果开始时间大于结束时间，反转轨迹点顺序并交换时间戳
+	if config.PathEndTimestamp > 0 && startTimestamp > config.PathEndTimestamp {
+		logx.Info("检测到开始时间大于结束时间，自动反转轨迹顺序")
+		// 反转点数组
+		for i, j := 0, len(points)-1; i < j; i, j = i+1, j-1 {
+			points[i], points[j] = points[j], points[i]
+		}
+		// 交换时间戳
+		startTimestamp, config.PathEndTimestamp = config.PathEndTimestamp, startTimestamp
+	}
+
+	// 如果设置了结束时间，需要先计算总点数（包括插值点）以正确计算时间间隔
+	var totalPoints int64 = int64(len(points))
+	if config.EnableInsertPointStrategy == 1 {
+		// 计算插值后的总点数
+		totalPoints = 1 // 第一个点
+		for i := 1; i < len(points); i++ {
+			interpolatedPoints := pointcalc.Calculate(points[i-1], points[i], config.InsertPointDistance)
+			totalPoints += int64(len(interpolatedPoints))
+		}
+	}
+
 	// 计算时间间隔（如果设置了结束时间）
-	timeInterval := int64(1) // 默认1秒间隔
-	if config.PathEndTimestamp > 0 && config.PathStartTimestamp > 0 && len(points) > 1 {
-		totalDuration := config.PathEndTimestamp - config.PathStartTimestamp
-		timeInterval = totalDuration / int64(len(points)-1)
+	var timeInterval int64 = 1 // 默认1秒间隔
+	useEndTime := config.PathEndTimestamp > 0 && startTimestamp > 0 && totalPoints > 1
+	if useEndTime {
+		totalDuration := config.PathEndTimestamp - startTimestamp
+		timeInterval = totalDuration / (totalPoints - 1)
 		if timeInterval < 1 {
 			timeInterval = 1
 		}
 	}
 
-	currentTimestamp := config.PathStartTimestamp
-	if currentTimestamp == 0 {
-		currentTimestamp = time.Now().Unix()
-	}
+	// 使用点索引来计算时间戳，确保最后一个点的时间戳等于结束时间
+	pointIndex := int64(0)
 
 	for i, point := range points {
 		// 第0个坐标或者不需要插入值，不需要计算中间点，直接写入
 		if i == 0 || config.EnableInsertPointStrategy == 0 {
+			// 计算当前点的时间戳
+			var currentTimestamp int64
+			if useEndTime {
+				currentTimestamp = startTimestamp + pointIndex*timeInterval
+				// 如果是最后一个点，使用精确的结束时间
+				if i == len(points)-1 {
+					currentTimestamp = config.PathEndTimestamp
+				}
+			} else {
+				currentTimestamp = startTimestamp + pointIndex*timeInterval
+			}
+
 			row := model.NewRow()
 			row.DataTime = currentTimestamp
-			row.Altitude = config.DefaultAltitude // 使用配置的海拔高度
+			row.Altitude = config.DefaultAltitude         // 使用配置的海拔高度
 			row.Speed = calculateSpeed(config, points, i) // 计算速度
 			row.Latitude = point.Latitude
 			row.Longitude = point.Longitude
 			sl.AddCSVRow(*row)
+			pointIndex++
 		} else {
 			interpolatedPoints := pointcalc.Calculate(points[i-1], point, config.InsertPointDistance)
-			for _, interpolatedPoint := range interpolatedPoints {
+			for j, interpolatedPoint := range interpolatedPoints {
+				// 计算当前点的时间戳
+				var currentTimestamp int64
+				if useEndTime {
+					currentTimestamp = startTimestamp + pointIndex*timeInterval
+					// 如果是最后一个点，使用精确的结束时间
+					if i == len(points)-1 && j == len(interpolatedPoints)-1 {
+						currentTimestamp = config.PathEndTimestamp
+					}
+				} else {
+					currentTimestamp = startTimestamp + pointIndex*timeInterval
+				}
+
 				row := model.NewRow()
 				row.Point = interpolatedPoint
 				row.DataTime = currentTimestamp
 				row.Altitude = config.DefaultAltitude
 				row.Speed = calculateSpeed(config, points, i)
 				sl.AddCSVRow(*row)
-				currentTimestamp += timeInterval
+				pointIndex++
 			}
 		}
+	}
 
-		if i > 0 {
-			currentTimestamp += timeInterval
-		}
+	// 确保最后一个点的时间戳等于结束时间（如果设置了结束时间）
+	if useEndTime && len(sl.CSVData) > 0 {
+		// CSVData 的第一个元素是 DataTime
+		sl.CSVData[len(sl.CSVData)-1][0] = fmt.Sprintf("%d", config.PathEndTimestamp)
 	}
 
 	logx.InfoF("处理经纬度完成，原始坐标%d个，插点后坐标%d个", len(points), len(sl.CSVData))
@@ -259,7 +312,7 @@ func calculateHaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 
 	a := math.Sin(deltaLat/2)*math.Sin(deltaLat/2) +
 		math.Cos(lat1Rad)*math.Cos(lat2Rad)*
-		math.Sin(deltaLon/2)*math.Sin(deltaLon/2)
+			math.Sin(deltaLon/2)*math.Sin(deltaLon/2)
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 
 	return earthRadius * c

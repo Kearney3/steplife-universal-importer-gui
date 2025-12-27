@@ -3,7 +3,6 @@ package gui
 import (
 	"fmt"
 	"image/color"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -76,54 +75,37 @@ type GUI struct {
 	customTheme     fyne.Theme
 }
 
-// loadCustomFont 加载自定义字体
-func (g *GUI) loadCustomFont() error {
-	fontPath := "./resource/MiSans-Regular.otf"
-
-	// 检查字体文件是否存在
-	if _, err := os.Stat(fontPath); os.IsNotExist(err) {
-		logx.InfoF("字体文件不存在 %s，使用系统默认字体: %v", fontPath, err)
-		return err
-	}
-
-	fontData, err := ioutil.ReadFile(fontPath)
-	if err != nil {
-		logx.InfoF("无法读取字体文件 %s，使用系统默认字体: %v", fontPath, err)
-		return err
-	}
-
-	if len(fontData) == 0 {
-		logx.InfoF("字体文件为空 %s，使用系统默认字体", fontPath)
-		return fmt.Errorf("font file is empty")
-	}
-
-	g.fontRegular = fyne.NewStaticResource("MiSans-Regular", fontData)
-	logx.InfoF("成功加载自定义字体: MiSans-Regular.otf (大小: %d bytes)", len(fontData))
-	return nil
+type myTheme struct {
+	regular fyne.Resource
 }
 
-// customTheme 实现自定义主题
-type customTheme struct {
-	fontRegular fyne.Resource
-}
-
-func (c *customTheme) Font(style fyne.TextStyle) fyne.Resource {
-	if c.fontRegular != nil {
-		return c.fontRegular
-	}
-	return theme.DefaultTheme().Font(style)
-}
-
-func (c *customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+func (t *myTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	return theme.DefaultTheme().Color(name, variant)
 }
 
-func (c *customTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+func (t *myTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 	return theme.DefaultTheme().Icon(name)
 }
 
-func (c *customTheme) Size(name fyne.ThemeSizeName) float32 {
+func (m *myTheme) Font(style fyne.TextStyle) fyne.Resource {
+	return m.regular
+}
+
+func (m *myTheme) Size(name fyne.ThemeSizeName) float32 {
 	return theme.DefaultTheme().Size(name)
+}
+
+func (t *myTheme) SetFonts(regularFontPath string) {
+	t.regular = loadCustomFont(regularFontPath)
+}
+
+func loadCustomFont(fontPath string) fyne.Resource {
+	res, err := fyne.LoadResourceFromPath(fontPath)
+	if err != nil {
+		fyne.LogError("Error loading specified font", err)
+		return nil
+	}
+	return res
 }
 
 // NewGUI 创建GUI实例
@@ -143,14 +125,9 @@ func NewGUI() *GUI {
 		},
 	}
 
-	// 加载自定义字体
-	gui.loadCustomFont()
-
-	// 设置自定义主题
-	if gui.fontRegular != nil {
-		gui.customTheme = &customTheme{fontRegular: gui.fontRegular}
-		gui.app.Settings().SetTheme(gui.customTheme)
-	}
+	mytheme := &myTheme{}                             // 设置自定义主题
+	mytheme.SetFonts("./resource/MiSans-Regular.otf") // 设置自定义字体
+	gui.app.Settings().SetTheme(mytheme)              // 设置自定义主题
 
 	gui.window = gui.app.NewWindow(fmt.Sprintf("一生足迹数据导入器 v%s", consts.Version))
 	gui.window.SetMaster()
@@ -162,6 +139,12 @@ func NewGUI() *GUI {
 func (g *GUI) Run() {
 	g.loadConfig()
 	g.createMainWindow()
+
+	// 设置GUI日志回调，将logx的日志输出到GUI
+	logx.SetGUILogger(func(message string) {
+		g.addLog(message)
+	})
+
 	g.window.ShowAndRun()
 }
 
@@ -337,10 +320,15 @@ func (g *GUI) createMainLayout() fyne.CanvasObject {
 		g.saveConfigDialog()
 	})
 
+	resetConfigButton := widget.NewButtonWithIcon("重置配置", theme.DeleteIcon(), func() {
+		g.resetConfigDialog()
+	})
+
 	buttons := container.NewHBox(
 		layout.NewSpacer(),
 		processButton,
 		saveConfigButton,
+		resetConfigButton,
 		layout.NewSpacer(),
 	)
 
@@ -434,9 +422,16 @@ func (g *GUI) createTimeSettings() fyne.CanvasObject {
 
 	endTimeContainer := container.NewBorder(nil, nil, nil, endTimeButton, endTimeEntry)
 
-	return container.New(layout.NewFormLayout(),
-		widget.NewLabel("开始时间:"), startTimeContainer,
-		widget.NewLabel("结束时间:"), endTimeContainer,
+	// 添加提示信息：如果开始时间大于结束时间，轨迹会自动反转
+	tipLabel := widget.NewLabel("💡 提示：如果开始时间大于结束时间，轨迹将自动反转处理")
+	tipLabel.Wrapping = fyne.TextWrapWord
+
+	return container.NewVBox(
+		container.New(layout.NewFormLayout(),
+			widget.NewLabel("开始时间:"), startTimeContainer,
+			widget.NewLabel("结束时间:"), endTimeContainer,
+		),
+		container.NewPadded(tipLabel),
 	)
 }
 
@@ -642,6 +637,35 @@ func (g *GUI) saveConfigDialog() {
 	dialog.ShowInformation("成功", "配置已保存", g.window)
 }
 
+// resetConfigDialog 重置配置对话框
+func (g *GUI) resetConfigDialog() {
+	dialog.ShowConfirm("重置配置", "确定要重置所有配置为默认值吗？此操作不会保存到文件。", func(confirmed bool) {
+		if confirmed {
+			g.resetConfig()
+			// 重新创建主窗口内容以更新UI
+			g.createMainWindow()
+			dialog.ShowInformation("成功", "配置已重置为默认值", g.window)
+			g.addLog("配置已重置为默认值")
+		}
+	}, g.window)
+}
+
+// resetConfig 重置配置为默认值
+func (g *GUI) resetConfig() {
+	g.config = model.Config{
+		EnableInsertPointStrategy: 1,
+		InsertPointDistance:       100,
+		DefaultAltitude:           0.0,
+		SpeedMode:                 "auto",
+		ManualSpeed:               1.5,
+		EnableBatchProcessing:     1,
+		PathStartTime:             "",
+		PathEndTime:               "",
+		PathStartTimestamp:        0,
+		PathEndTimestamp:          0,
+	}
+}
+
 // startProcessing 开始处理文件
 func (g *GUI) startProcessing(sourcePath, outputDir string) {
 	if sourcePath == "" {
@@ -697,10 +721,15 @@ func (g *GUI) startProcessing(sourcePath, outputDir string) {
 		g.config.PathEndTimestamp = timestamp
 	}
 
-	// 保存配置
-	g.saveConfig()
+	// 检测并提示轨迹反转
+	if g.config.PathEndTimestamp > 0 && g.config.PathStartTimestamp > g.config.PathEndTimestamp {
+		g.addLog("⚠️  检测到开始时间大于结束时间，轨迹将自动反转处理")
+		g.addLog(fmt.Sprintf("   开始时间: %s", g.config.PathStartTime))
+		g.addLog(fmt.Sprintf("   结束时间: %s", g.config.PathEndTime))
+		g.addLog("   轨迹将从终点反向到起点")
+	}
 
-	// 开始处理
+	// 开始处理（不再自动保存配置）
 	go g.processFiles()
 }
 
