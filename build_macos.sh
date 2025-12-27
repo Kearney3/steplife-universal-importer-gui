@@ -177,6 +177,10 @@ cat > "${APP_BUNDLE_NAME}/Contents/Info.plist" <<EOF
   <string>10.13</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.utilities</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2024</string>
 EOF
 
 # 如果图标存在，添加图标配置
@@ -194,6 +198,30 @@ EOF
 echo "Info.plist 已创建"
 if [ -n "$ICON_FILE" ]; then
     echo "图标已配置: ${ICON_FILE}"
+fi
+echo ""
+
+# 验证可执行文件存在且可执行
+if [ ! -f "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}" ]; then
+    echo "错误: 可执行文件不存在于 ${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+    exit 1
+fi
+
+# 确保可执行文件有执行权限
+chmod +x "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+
+# 使用 ad-hoc 签名（即使没有开发者证书，也可以让应用在本地运行）
+# 这会绕过 Gatekeeper 的基本检查，但用户首次打开时仍可能看到警告
+echo "对应用包进行 ad-hoc 签名..."
+codesign --force --sign - "${APP_BUNDLE_NAME}" 2>&1 || {
+    echo "警告: 代码签名失败，但继续..."
+}
+
+# 验证签名（如果成功）
+if codesign --verify --verbose "${APP_BUNDLE_NAME}" 2>&1; then
+    echo "应用包签名成功"
+else
+    echo "注意: 应用签名验证失败（这对于 ad-hoc 构建是正常的）"
 fi
 echo ""
 
