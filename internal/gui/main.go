@@ -152,7 +152,7 @@ func NewGUI() *GUI {
 		gui.app.SetIcon(icon)
 	}
 
-	gui.window = gui.app.NewWindow(fmt.Sprintf("一生足迹数据导入器 v%s", consts.Version))
+	gui.window = gui.app.NewWindow(fmt.Sprintf("%s v%s", consts.AppName, consts.Version))
 	gui.window.SetMaster()
 
 	return gui

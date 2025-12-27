@@ -1,6 +1,8 @@
 package consts
 
 const (
+	// 应用名称
+	AppName = "一生足迹数据导入器"
 	// 应用版本号
 	Version = "2.0"
 )

@@ -1,199 +1,314 @@
-name: Build and Release
+name: Release
 
 on:
   push:
     tags:
-      - 'v*'  # 当推送以 v 开头的标签时触发
-  workflow_dispatch:  # 允许手动触发
+      - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 需要权限来创建 release 和上传文件
+    
     strategy:
-      fail-fast: false
       matrix:
         include:
-          # Windows
-          - os: windows-latest
-            arch: amd64
-            goos: windows
+          - goos: linux
             goarch: amd64
-            output: steplife-importer-windows-amd64.exe
-          - os: windows-latest
-            arch: arm64
-            goos: windows
+          - goos: linux
             goarch: arm64
-            output: steplife-importer-windows-arm64.exe
-          # macOS
-          - os: macos-latest
-            arch: amd64
-            goos: darwin
+          - goos: darwin
             goarch: amd64
-            output: steplife-importer-darwin-amd64
-          - os: macos-latest
-            arch: arm64
-            goos: darwin
+          - goos: darwin
             goarch: arm64
-            output: steplife-importer-darwin-arm64
-          # Linux
-          - os: ubuntu-latest
-            arch: amd64
-            goos: linux
+          - goos: windows
             goarch: amd64
-            output: steplife-importer-linux-amd64
-          - os: ubuntu-latest
-            arch: arm64
-            goos: linux
+          - goos: windows
             goarch: arm64
-            output: steplife-importer-linux-arm64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.2'
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags="-s -w" -o ${{ matrix.output }} ./cmd
-          ls -lh ${{ matrix.output }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ matrix.output }}
-          retention-days: 7
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+      
+      - name: Extract app info
+        id: app_info
+        run: |
+          # 从 consts.go 提取应用名称（兼容所有系统）
+          APP_NAME=$(grep 'AppName = ' internal/const/consts.go | sed 's/.*AppName = "\(.*\)".*/\1/' | head -1)
+          if [ -z "$APP_NAME" ]; then
+            echo "Error: Could not extract AppName from consts.go"
+            exit 1
+          fi
+          
+          # 从 consts.go 提取版本号（兼容所有系统）
+          VERSION=$(grep 'Version = ' internal/const/consts.go | sed 's/.*Version = "\(.*\)".*/\1/' | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "Error: Could not extract Version from consts.go"
+            exit 1
+          fi
+          
+          # 从 go.mod 获取模块名，用于生成 Bundle ID
+          MODULE_NAME=$(grep '^module ' go.mod | awk '{print $2}')
+          BUNDLE_ID=$(echo "$MODULE_NAME" | tr '/' '.')
+          
+          # 生成可执行文件名（基于模块名）
+          EXECUTABLE_NAME=$(basename "$MODULE_NAME")
+          
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_OUTPUT
+          echo "EXECUTABLE_NAME=$EXECUTABLE_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Extracted app info:"
+          echo "  App Name: $APP_NAME"
+          echo "  Version: $VERSION"
+          echo "  Bundle ID: $BUNDLE_ID"
+          echo "  Executable Name: $EXECUTABLE_NAME"
+      
+      - name: Prepare Windows icon
+        if: matrix.goos == 'windows'
+        run: |
+          # 检查图标文件是否存在
+          if [ -f "internal/gui/resources/icon.ico" ]; then
+            echo "Processing Windows icon..."
+            
+            # 安装 rsrc 工具
+            go install github.com/akavel/rsrc@latest
+            
+            # 生成资源文件
+            rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_${{ matrix.goarch }}.syso
+            
+            if [ -f "rsrc_windows_${{ matrix.goarch }}.syso" ]; then
+              echo "Windows icon resource file created: rsrc_windows_${{ matrix.goarch }}.syso"
+            else
+              echo "Warning: Failed to create resource file"
+            fi
+          else
+            echo "Warning: icon.ico not found, skipping icon embedding"
+          fi
+      
+      - name: Build
+        id: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # 动态生成输出文件名（基于模块名）
+          EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
+          OUTPUT_FILE="${EXECUTABLE_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          
+          # Windows 平台添加 .exe 扩展名
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            OUTPUT_FILE="${OUTPUT_FILE}.exe"
+          fi
+          
+          # 构建
+          go build -tags=embed_font -trimpath -ldflags="-s -w" -o "${OUTPUT_FILE}" ./cmd
+          
+          # 将输出文件名保存为步骤输出，供后续步骤使用
+          echo "OUTPUT_FILE=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
+          
+          # 清理资源文件（如果存在）
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            rm -f rsrc_windows_*.syso 2>/dev/null || true
+          fi
+      
+      - name: Create macOS .app bundle
+        if: matrix.goos == 'darwin'
+        id: create_app_bundle
+        run: |
+          APP_NAME="${{ steps.app_info.outputs.APP_NAME }}"
+          VERSION="${{ steps.app_info.outputs.VERSION }}"
+          BUNDLE_ID="${{ steps.app_info.outputs.BUNDLE_ID }}"
+          EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
+          
+          # 生成 .app 名称（应用名称-架构.app）
+          APP_BUNDLE_NAME="${APP_NAME}-${{ matrix.goarch }}.app"
+          
+          # 创建 .app 目录结构
+          mkdir -p "${APP_BUNDLE_NAME}/Contents/MacOS"
+          mkdir -p "${APP_BUNDLE_NAME}/Contents/Resources"
+          
+          # 移动可执行文件到 MacOS 目录
+          mv "${{ steps.build.outputs.OUTPUT_FILE }}" "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+          chmod +x "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+          
+          # 复制图标（如果存在）
+          ICON_FILE=""
+          if [ -f "internal/gui/resources/icon.png" ]; then
+            cp "internal/gui/resources/icon.png" "${APP_BUNDLE_NAME}/Contents/Resources/icon.png"
+            ICON_FILE="icon"
+          fi
+          
+          # 创建 Info.plist
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleExecutable</key>\n  <string>%s</string>\n  <key>CFBundleIdentifier</key>\n  <string>%s</string>\n  <key>CFBundleName</key>\n  <string>%s</string>\n  <key>CFBundleDisplayName</key>\n  <string>%s</string>\n  <key>CFBundleVersion</key>\n  <string>%s</string>\n  <key>CFBundleShortVersionString</key>\n  <string>%s</string>\n  <key>CFBundlePackageType</key>\n  <string>APPL</string>\n  <key>CFBundleSignature</key>\n  <string>????</string>\n  <key>LSMinimumSystemVersion</key>\n  <string>10.13</string>\n  <key>NSHighResolutionCapable</key>\n  <true/>%s\n</dict>\n</plist>\n' \
+            "${EXECUTABLE_NAME}" \
+            "${BUNDLE_ID}" \
+            "${APP_NAME}" \
+            "${APP_NAME}" \
+            "${VERSION}" \
+            "${VERSION}" \
+            "$([ -n "$ICON_FILE" ] && printf '\n  <key>CFBundleIconFile</key>\n  <string>%s</string>' "$ICON_FILE" || echo '')" \
+            > "${APP_BUNDLE_NAME}/Contents/Info.plist"
+          
+          echo "Created ${APP_BUNDLE_NAME}"
+          echo "App Name: ${APP_NAME}"
+          echo "Version: ${VERSION}"
+          ls -lh "${APP_BUNDLE_NAME}/Contents/MacOS/"
+          
+          # 将 .app 名称保存为步骤输出，供后续步骤使用
+          echo "APP_BUNDLE_NAME=${APP_BUNDLE_NAME}" >> $GITHUB_OUTPUT
+      
+      - name: Upload artifact (macOS)
+        if: matrix.goos == 'darwin'
+        id: upload_macos
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.create_app_bundle.outputs.APP_BUNDLE_NAME }}
+          path: ${{ steps.create_app_bundle.outputs.APP_BUNDLE_NAME }}
+          retention-days: 1
+      
+      - name: Upload artifact (other platforms)
+        if: matrix.goos != 'darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.OUTPUT_FILE }}
+          path: ${{ steps.build.outputs.OUTPUT_FILE }}
+          retention-days: 1
+  
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-
-      - name: Prepare release assets
+      
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      
+      - name: Extract app info for release notes
+        id: release_info
         run: |
-          mkdir -p release
+          # 从 consts.go 提取应用名称
+          APP_NAME=$(grep 'AppName = ' internal/const/consts.go | sed 's/.*AppName = "\(.*\)".*/\1/' | head -1)
           
-          # 为每个平台创建包含资源文件的压缩包
+          # 从 consts.go 提取版本号
+          VERSION=$(grep 'Version = ' internal/const/consts.go | sed 's/.*Version = "\(.*\)".*/\1/' | head -1)
+          
+          # 从 go.mod 获取模块名，用于生成可执行文件名
+          MODULE_NAME=$(grep '^module ' go.mod | awk '{print $2}')
+          EXECUTABLE_NAME=$(basename "$MODULE_NAME")
+          
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "EXECUTABLE_NAME=$EXECUTABLE_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          APP_NAME="${{ steps.release_info.outputs.APP_NAME }}"
+          VERSION="${{ steps.release_info.outputs.VERSION }}"
+          EXECUTABLE_NAME="${{ steps.release_info.outputs.EXECUTABLE_NAME }}"
+          TAG_NAME="${{ steps.tag.outputs.tag }}"
+          
+          # 生成文件名
+          WIN_AMD64="${EXECUTABLE_NAME}-windows-amd64.exe"
+          WIN_ARM64="${EXECUTABLE_NAME}-windows-arm64.exe"
+          MACOS_AMD64="${APP_NAME}-amd64.app"
+          MACOS_ARM64="${APP_NAME}-arm64.app"
+          LINUX_AMD64="${EXECUTABLE_NAME}-linux-amd64"
+          LINUX_ARM64="${EXECUTABLE_NAME}-linux-arm64"
+          
+          cat > release_notes.md <<RELEASE_NOTES_EOF
+          # ${APP_NAME} ${TAG_NAME}
+          
+          ## 📦 下载说明
+          
+          | 平台 | 架构 | 文件名 | 使用方法 |
+          |------|------|--------|---------|
+          | Windows | amd64 | \`${WIN_AMD64}\` | 双击运行，首次需允许权限 |
+          | Windows | arm64 | \`${WIN_ARM64}\` | 双击运行，首次需允许权限 |
+          | macOS | amd64 | \`${MACOS_AMD64}\` | 双击打开，首次需在系统设置中允许 |
+          | macOS | arm64 | \`${MACOS_ARM64}\` | 双击打开，首次需在系统设置中允许 |
+          | Linux | amd64 | \`${LINUX_AMD64}\` | \`chmod +x\` 后运行，GUI 模式默认，CLI 模式加 \`--cli\` |
+          | Linux | arm64 | \`${LINUX_ARM64}\` | \`chmod +x\` 后运行，GUI 模式默认，CLI 模式加 \`--cli\` |
+          
+          ## 📋 系统要求
+          
+          | 平台 | 最低版本 |
+          |------|---------|
+          | Windows | Windows 10 (64位) |
+          | macOS | macOS 10.13 |
+          | Linux | 支持 GTK3 的现代发行版 |
+          
+          **版本：** ${VERSION}  
+          **发布日期：** $(date +'%Y-%m-%d')
+          RELEASE_NOTES_EOF
+          
+          # 显示生成的 release notes
+          cat release_notes.md
+      
+      - name: Prepare release files
+        run: |
+          mkdir -p ./release
+          
+          # 遍历所有 artifact 目录
           for artifact_dir in ./artifacts/*/; do
-            # 获取平台和架构信息
-            platform_arch=$(basename "$artifact_dir")
-            
-            # 查找可执行文件
-            exe_file=$(find "$artifact_dir" -type f \( -perm -111 -o -name "*.exe" \) | head -1)
-            if [[ -z "$exe_file" ]]; then
-              echo "未找到可执行文件在 $artifact_dir"
-              continue
+            if [ -d "$artifact_dir" ]; then
+              # 检查是否是 .app 目录
+              app_dir=$(find "$artifact_dir" -maxdepth 1 -type d -name "*.app" | head -1)
+              if [ -n "$app_dir" ]; then
+                # 复制 .app 目录
+                appname=$(basename "$app_dir")
+                cp -R "$app_dir" "./release/$appname"
+                echo "Copied .app bundle: $appname"
+              else
+                # 复制其他文件（Linux 和 Windows 可执行文件）
+                find "$artifact_dir" -type f | while read file; do
+                  filename=$(basename "$file")
+                  cp "$file" "./release/$filename"
+                  echo "Copied file: $filename"
+                done
+              fi
             fi
-            
-            exe_name=$(basename "$exe_file")
-            
-            # 确定包名和格式
-            if [[ "$exe_name" == *.exe ]]; then
-              # Windows
-              package_name="${exe_name%.exe}"
-              package_format="zip"
-            else
-              # Linux/macOS
-              package_name="$exe_name"
-              package_format="tar.gz"
-            fi
-            
-            # 创建临时目录并复制文件
-            temp_dir="release/${package_name}"
-            mkdir -p "$temp_dir"
-            
-            # 复制可执行文件
-            cp "$exe_file" "$temp_dir/"
-            
-            # 复制资源文件
-            if [[ -d "./resource" ]]; then
-              cp -r ./resource "$temp_dir/"
-            fi
-            
-            # 复制文档文件
-            [[ -f "./README.md" ]] && cp ./README.md "$temp_dir/"
-            [[ -f "./LICENSE" ]] && cp ./LICENSE "$temp_dir/"
-            
-            # 创建压缩包
-            cd release
-            if [[ "$package_format" == "zip" ]]; then
-              zip -r "${package_name}.zip" "$(basename "$temp_dir")"
-            else
-              tar -czf "${package_name}.tar.gz" "$(basename "$temp_dir")"
-            fi
-            cd ..
-            
-            # 清理临时目录
-            rm -rf "$temp_dir"
           done
           
-          echo "生成的发布包："
-          ls -lh release/
-
-      - name: Extract version from tag
-        id: tag
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-
+          # 为 Linux 文件添加执行权限（使用通配符匹配所有 Linux 可执行文件）
+          find ./release -type f ! -name "*.exe" ! -name "*.app" -exec chmod +x {} \; 2>/dev/null || true
+          
+          # 显示收集到的文件
+          echo ""
+          echo "=== Release files ==="
+          ls -lh ./release/
+          echo ""
+          echo "=== .app bundles ==="
+          find ./release -name "*.app" -type d -exec du -sh {} \;
+      
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          body_path: release_notes.md
           files: ./release/*
-          name: Release ${{ steps.tag.outputs.version }}
-          body: |
-            ## 一生足迹数据导入器 ${{ steps.tag.outputs.version }}
-
-            ### 下载说明
-
-            请根据您的操作系统和架构选择合适的文件下载：
-
-            - **Windows**: `steplife-importer-windows-*.zip`
-            - **macOS**: `steplife-importer-darwin-*.tar.gz`
-            - **Linux**: `steplife-importer-linux-*.tar.gz`
-
-            ### 使用说明
-
-            1. 解压下载的文件
-            2. 运行可执行文件
-            3. 详细使用说明请参考 [README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
-
-            ### 变更日志
-
-            查看 [提交历史](https://github.com/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.ref }}) 了解详细变更。
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

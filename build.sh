@@ -56,7 +56,7 @@ fi
 echo "目标平台: $OS/$ARCH"
 
 # 清理之前的构建
-rm -f main main.exe
+rm -f main main.exe rsrc_windows_*.syso
 
 # 构建参数
 # -trimpath: 移除文件系统中的路径信息，使构建更可重现
@@ -73,9 +73,35 @@ else
     echo "字体嵌入: 禁用（将从文件系统加载字体）"
 fi
 
+# Windows 图标处理
+if [[ "$OS" == "windows" ]]; then
+    if [ -f "internal/gui/resources/icon.ico" ]; then
+        echo "处理 Windows 图标..."
+        # 检查 rsrc 工具是否已安装
+        if ! command -v rsrc &> /dev/null; then
+            echo "安装 rsrc 工具..."
+            go install github.com/akavel/rsrc@latest
+        fi
+        
+        # 生成资源文件
+        rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_${ARCH}.syso
+        
+        if [ -f "rsrc_windows_${ARCH}.syso" ]; then
+            echo "Windows 图标资源文件已创建"
+        else
+            echo "警告: 无法创建图标资源文件"
+        fi
+    else
+        echo "警告: 未找到图标文件 internal/gui/resources/icon.ico"
+    fi
+fi
+
 # 构建
 if [[ "$OS" == "windows" ]]; then
     GOOS=$OS GOARCH=$ARCH go build $BUILD_TAGS -trimpath -ldflags="-s -w" -o main.exe ./cmd
+    
+    # 清理资源文件
+    rm -f rsrc_windows_*.syso 2>/dev/null || true
     if [ $? -eq 0 ]; then
         echo "构建完成: main.exe"
         # 显示文件大小
