@@ -236,11 +236,11 @@ jobs:
             # 安装 rsrc 工具
             go install github.com/akavel/rsrc@latest
             
-            # 生成资源文件
-            rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_amd64.syso
+            # 生成资源文件到 cmd 目录（Go 编译器会在构建包时自动包含同目录下的 .syso 文件）
+            rsrc -ico internal/gui/resources/icon.ico -o cmd/rsrc_windows_amd64.syso
             
-            if [ -f "rsrc_windows_amd64.syso" ]; then
-              echo "Windows icon resource file created: rsrc_windows_amd64.syso"
+            if [ -f "cmd/rsrc_windows_amd64.syso" ]; then
+              echo "Windows icon resource file created: cmd/rsrc_windows_amd64.syso"
             else
               echo "Warning: Failed to create resource file"
             fi
@@ -267,7 +267,7 @@ jobs:
           echo "OUTPUT_FILE=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
           
           # 清理资源文件（如果存在）
-          rm -f rsrc_windows_*.syso 2>/dev/null || true
+          rm -f cmd/rsrc_windows_*.syso 2>/dev/null || true
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -392,7 +392,7 @@ jobs:
           fi
           
           # 创建 Info.plist
-          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleExecutable</key>\n  <string>%s</string>\n  <key>CFBundleIdentifier</key>\n  <string>%s</string>\n  <key>CFBundleName</key>\n  <string>%s</string>\n  <key>CFBundleDisplayName</key>\n  <string>%s</string>\n  <key>CFBundleVersion</key>\n  <string>%s</string>\n  <key>CFBundleShortVersionString</key>\n  <string>%s</string>\n  <key>CFBundlePackageType</key>\n  <string>APPL</string>\n  <key>CFBundleSignature</key>\n  <string>????</string>\n  <key>LSMinimumSystemVersion</key>\n  <string>10.13</string>\n  <key>NSHighResolutionCapable</key>\n  <true/>%s\n</dict>\n</plist>\n' \
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleExecutable</key>\n  <string>%s</string>\n  <key>CFBundleIdentifier</key>\n  <string>%s</string>\n  <key>CFBundleName</key>\n  <string>%s</string>\n  <key>CFBundleDisplayName</key>\n  <string>%s</string>\n  <key>CFBundleVersion</key>\n  <string>%s</string>\n  <key>CFBundleShortVersionString</key>\n  <string>%s</string>\n  <key>CFBundlePackageType</key>\n  <string>APPL</string>\n  <key>CFBundleSignature</key>\n  <string>????</string>\n  <key>LSMinimumSystemVersion</key>\n  <string>10.13</string>\n  <key>NSHighResolutionCapable</key>\n  <true/>\n  <key>LSApplicationCategoryType</key>\n  <string>public.app-category.utilities</string>\n  <key>NSHumanReadableCopyright</key>\n  <string>Copyright © 2024</string>%s\n</dict>\n</plist>\n' \
             "${EXECUTABLE_NAME}" \
             "${BUNDLE_ID}" \
             "${APP_NAME}" \
@@ -401,6 +401,30 @@ jobs:
             "${VERSION}" \
             "$([ -n "$ICON_FILE" ] && printf '\n  <key>CFBundleIconFile</key>\n  <string>%s</string>' "$ICON_FILE" || echo '')" \
             > "${APP_BUNDLE_NAME}/Contents/Info.plist"
+          
+          # 验证可执行文件存在且可执行
+          if [ ! -f "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}" ]; then
+            echo "Error: Executable file not found at ${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+            exit 1
+          fi
+          
+          # 确保可执行文件有执行权限
+          chmod +x "${APP_BUNDLE_NAME}/Contents/MacOS/${EXECUTABLE_NAME}"
+          
+          # 使用 ad-hoc 签名（即使没有开发者证书，也可以让应用在本地运行）
+          # 这会绕过 Gatekeeper 的基本检查，但用户首次打开时仍可能看到警告
+          echo "Signing app bundle with ad-hoc signature..."
+          # 签名整个应用包（ad-hoc 签名使用 - 作为签名标识）
+          codesign --force --sign - "${APP_BUNDLE_NAME}" 2>&1 || {
+            echo "Warning: Code signing failed, but continuing..."
+          }
+          
+          # 验证签名（如果成功）
+          if codesign --verify --verbose "${APP_BUNDLE_NAME}" 2>&1; then
+            echo "App bundle signed successfully"
+          else
+            echo "Note: App signing verification failed (this may be normal for ad-hoc builds)"
+          fi
           
           echo "Created ${APP_BUNDLE_NAME}"
           echo "App Name: ${APP_NAME}"

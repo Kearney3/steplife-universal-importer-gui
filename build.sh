@@ -56,7 +56,7 @@ fi
 echo "目标平台: $OS/$ARCH"
 
 # 清理之前的构建
-rm -f main main.exe rsrc_windows_*.syso
+rm -f main main.exe rsrc_windows_*.syso cmd/rsrc_windows_*.syso
 
 # 构建参数
 # -trimpath: 移除文件系统中的路径信息，使构建更可重现
@@ -83,11 +83,11 @@ if [[ "$OS" == "windows" ]]; then
             go install github.com/akavel/rsrc@latest
         fi
         
-        # 生成资源文件
-        rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_${ARCH}.syso
+        # 生成资源文件到 cmd 目录（Go 编译器会在构建包时自动包含同目录下的 .syso 文件）
+        rsrc -ico internal/gui/resources/icon.ico -o cmd/rsrc_windows_${ARCH}.syso
         
-        if [ -f "rsrc_windows_${ARCH}.syso" ]; then
-            echo "Windows 图标资源文件已创建"
+        if [ -f "cmd/rsrc_windows_${ARCH}.syso" ]; then
+            echo "Windows 图标资源文件已创建: cmd/rsrc_windows_${ARCH}.syso"
         else
             echo "警告: 无法创建图标资源文件"
         fi
@@ -101,7 +101,7 @@ if [[ "$OS" == "windows" ]]; then
     GOOS=$OS GOARCH=$ARCH go build $BUILD_TAGS -trimpath -ldflags="-s -w" -o main.exe ./cmd
     
     # 清理资源文件
-    rm -f rsrc_windows_*.syso 2>/dev/null || true
+    rm -f cmd/rsrc_windows_*.syso 2>/dev/null || true
     if [ $? -eq 0 ]; then
         echo "构建完成: main.exe"
         # 显示文件大小

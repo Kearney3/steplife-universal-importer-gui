@@ -215,10 +215,10 @@ func (g *GUI) loadConfig() {
 
 	// 处理时间戳
 	if g.config.PathStartTime != "" {
-		g.config.PathStartTimestamp, _ = timeUtils.ToTimestamp(g.config.PathStartTime)
+		g.config.PathStartTimestamp, _ = timeUtils.ToTimestampWithTimezone(g.config.PathStartTime, g.config.Timezone)
 	}
 	if g.config.PathEndTime != "" {
-		g.config.PathEndTimestamp, _ = timeUtils.ToTimestamp(g.config.PathEndTime)
+		g.config.PathEndTimestamp, _ = timeUtils.ToTimestampWithTimezone(g.config.PathEndTime, g.config.Timezone)
 	}
 }
 
@@ -233,6 +233,7 @@ func (g *GUI) saveConfig() error {
 	section.Key("pathStartTime").SetValue(g.config.PathStartTime)
 	section.Key("pathEndTime").SetValue(g.config.PathEndTime)
 	section.Key("timeInterval").SetValue(fmt.Sprintf("%d", g.config.TimeInterval))
+	section.Key("timezone").SetValue(g.config.Timezone)
 	section.Key("defaultAltitude").SetValue(fmt.Sprintf("%.2f", g.config.DefaultAltitude))
 	section.Key("speedMode").SetValue(g.config.SpeedMode)
 	section.Key("manualSpeed").SetValue(fmt.Sprintf("%.2f", g.config.ManualSpeed))
@@ -525,8 +526,75 @@ func (g *GUI) createTimeSettings() fyne.CanvasObject {
 
 	timeIntervalContainer := container.NewBorder(nil, nil, nil, nil, timeIntervalEntry)
 
+	// 时区选择下拉框
+	// 定义时区选项（按顺序）：显示名称 -> 时区ID
+	type timezoneOption struct {
+		DisplayName string
+		TimezoneID  string
+	}
+	timezoneOptions := []timezoneOption{
+		{"系统本地时区", ""},
+		{"UTC (协调世界时)", "UTC"},
+		{"中国 (北京时间)", "Asia/Shanghai"},
+		{"日本 (东京)", "Asia/Tokyo"},
+		{"香港", "Asia/Hong_Kong"},
+		{"新加坡", "Asia/Singapore"},
+		{"美国东部 (纽约)", "America/New_York"},
+		{"美国西部 (洛杉矶)", "America/Los_Angeles"},
+		{"美国中部 (芝加哥)", "America/Chicago"},
+		{"英国 (伦敦)", "Europe/London"},
+		{"法国 (巴黎)", "Europe/Paris"},
+		{"德国 (柏林)", "Europe/Berlin"},
+		{"澳大利亚 (悉尼)", "Australia/Sydney"},
+		{"澳大利亚 (墨尔本)", "Australia/Melbourne"},
+	}
+	
+	// 创建显示名称列表和映射
+	timezoneDisplayNames := make([]string, len(timezoneOptions))
+	timezoneIDToDisplay := make(map[string]string)
+	for i, opt := range timezoneOptions {
+		timezoneDisplayNames[i] = opt.DisplayName
+		timezoneIDToDisplay[opt.TimezoneID] = opt.DisplayName
+	}
+	
+	// 创建时区显示名称到ID的映射
+	timezoneDisplayToID := make(map[string]string)
+	for _, opt := range timezoneOptions {
+		timezoneDisplayToID[opt.DisplayName] = opt.TimezoneID
+	}
+	
+	timezoneSelect := widget.NewSelect(timezoneDisplayNames, func(selected string) {
+		// 根据显示名称查找时区ID
+		if tzID, exists := timezoneDisplayToID[selected]; exists {
+			g.config.Timezone = tzID
+		} else if strings.HasPrefix(selected, "自定义: ") {
+			// 处理自定义时区
+			g.config.Timezone = strings.TrimPrefix(selected, "自定义: ")
+		}
+	})
+	
+	// 设置当前选中的时区
+	if g.config.Timezone == "" {
+		timezoneSelect.SetSelected("系统本地时区")
+	} else {
+		// 查找对应的显示名称
+		if displayName, exists := timezoneIDToDisplay[g.config.Timezone]; exists {
+			timezoneSelect.SetSelected(displayName)
+		} else {
+			// 如果不在预定义选项中，添加到选项列表
+			customDisplay := fmt.Sprintf("自定义: %s", g.config.Timezone)
+			timezoneDisplayNames = append(timezoneDisplayNames, customDisplay)
+			timezoneIDToDisplay[g.config.Timezone] = customDisplay
+			timezoneDisplayToID[customDisplay] = g.config.Timezone
+			timezoneSelect.Options = timezoneDisplayNames
+			timezoneSelect.SetSelected(customDisplay)
+		}
+	}
+	
+	timezoneContainer := container.NewBorder(nil, nil, nil, nil, timezoneSelect)
+
 	// 添加提示信息
-	tipLabel := widget.NewLabel("💡 提示：\n1. 如果设置了结束时间，系统会在开始和结束时间之间均匀分配时间\n2. 如果设置了时间间隔，系统会按照指定间隔分配时间（负数会反转时间顺序）\n3. 如果都没有设置，所有时间统一为开始时间\n4. 如果开始时间大于结束时间，轨迹将自动反转处理")
+	tipLabel := widget.NewLabel("💡 提示：\n1. 如果设置了结束时间，系统会在开始和结束时间之间均匀分配时间\n2. 如果设置了时间间隔，系统会按照指定间隔分配时间（负数会反转时间顺序）\n3. 如果都没有设置，所有时间统一为开始时间\n4. 如果开始时间大于结束时间，轨迹将自动反转处理\n5. 时区设置会影响时间字符串的解析，选择对应的时区可确保时间戳正确")
 	tipLabel.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(
@@ -534,6 +602,7 @@ func (g *GUI) createTimeSettings() fyne.CanvasObject {
 			widget.NewLabel("开始时间:"), startTimeContainer,
 			widget.NewLabel("结束时间:"), endTimeContainer,
 			widget.NewLabel("时间间隔:"), timeIntervalContainer,
+			widget.NewLabel("时区:"), timezoneContainer,
 		),
 		container.NewPadded(tipLabel),
 	)
@@ -784,6 +853,7 @@ func (g *GUI) resetConfig() {
 		PathStartTime:             "",
 		PathEndTime:               "",
 		TimeInterval:              0,
+		Timezone:                  "",
 		PathStartTimestamp:        0,
 		PathEndTimestamp:          0,
 	}
@@ -825,7 +895,7 @@ func (g *GUI) startProcessing(sourcePath, outputDir string) {
 
 	// 验证和处理时间配置
 	if g.config.PathStartTime != "" {
-		timestamp, err := timeUtils.ToTimestamp(g.config.PathStartTime)
+		timestamp, err := timeUtils.ToTimestampWithTimezone(g.config.PathStartTime, g.config.Timezone)
 		if err != nil {
 			dialog.ShowError(errors.Wrap(err, "开始时间格式错误"), g.window)
 			return
@@ -836,7 +906,7 @@ func (g *GUI) startProcessing(sourcePath, outputDir string) {
 	}
 
 	if g.config.PathEndTime != "" {
-		timestamp, err := timeUtils.ToTimestamp(g.config.PathEndTime)
+		timestamp, err := timeUtils.ToTimestampWithTimezone(g.config.PathEndTime, g.config.Timezone)
 		if err != nil {
 			dialog.ShowError(errors.Wrap(err, "结束时间格式错误"), g.window)
 			return
