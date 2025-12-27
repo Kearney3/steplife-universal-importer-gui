@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'  # 匹配所有以 v 开头的 tag，如 v1.0.0
+  workflow_dispatch:  # 允许手动触发工作流
 
 jobs:
   build-linux-windows:
