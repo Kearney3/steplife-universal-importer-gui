@@ -22,8 +22,6 @@ jobs:
             goarch: arm64
           - goos: windows
             goarch: amd64
-          - goos: windows
-            goarch: arm64
     
     steps:
       - name: Checkout code
@@ -210,6 +208,107 @@ jobs:
           path: ${{ steps.build_docker.outputs.OUTPUT_FILE || steps.build.outputs.OUTPUT_FILE }}
           retention-days: 1
   
+  build-windows-arm64:
+    name: Build Windows ARM64
+    runs-on: windows-11-arm
+    permissions:
+      contents: write  # 需要权限来创建 release 和上传文件
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+      
+      - name: Extract app info
+        id: app_info
+        shell: bash
+        run: |
+          # 从 consts.go 提取应用名称（兼容所有系统）
+          APP_NAME=$(grep 'AppName = ' internal/const/consts.go | sed 's/.*AppName = "\(.*\)".*/\1/' | head -1)
+          if [ -z "$APP_NAME" ]; then
+            echo "Error: Could not extract AppName from consts.go"
+            exit 1
+          fi
+          
+          # 从 consts.go 提取版本号（兼容所有系统）
+          VERSION=$(grep 'Version = ' internal/const/consts.go | sed 's/.*Version = "\(.*\)".*/\1/' | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "Error: Could not extract Version from consts.go"
+            exit 1
+          fi
+          
+          # 从 go.mod 获取模块名，用于生成 Bundle ID
+          MODULE_NAME=$(grep '^module ' go.mod | awk '{print $2}')
+          BUNDLE_ID=$(echo "$MODULE_NAME" | tr '/' '.')
+          
+          # 生成可执行文件名（基于模块名）
+          EXECUTABLE_NAME=$(basename "$MODULE_NAME")
+          
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_OUTPUT
+          echo "EXECUTABLE_NAME=$EXECUTABLE_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Extracted app info:"
+          echo "  App Name: $APP_NAME"
+          echo "  Version: $VERSION"
+          echo "  Bundle ID: $BUNDLE_ID"
+          echo "  Executable Name: $EXECUTABLE_NAME"
+      
+      - name: Prepare Windows icon
+        shell: bash
+        run: |
+          # 检查图标文件是否存在
+          if [ -f "internal/gui/resources/icon.ico" ]; then
+            echo "Processing Windows icon..."
+            
+            # 安装 rsrc 工具
+            go install github.com/akavel/rsrc@latest
+            
+            # 生成资源文件
+            rsrc -ico internal/gui/resources/icon.ico -o rsrc_windows_arm64.syso
+            
+            if [ -f "rsrc_windows_arm64.syso" ]; then
+              echo "Windows icon resource file created: rsrc_windows_arm64.syso"
+            else
+              echo "Warning: Failed to create resource file"
+            fi
+          else
+            echo "Warning: icon.ico not found, skipping icon embedding"
+          fi
+      
+      - name: Build
+        id: build
+        shell: bash
+        env:
+          GOOS: windows
+          GOARCH: arm64
+          CGO_ENABLED: 1
+        run: |
+          # 动态生成输出文件名（基于模块名）
+          EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
+          OUTPUT_FILE="${EXECUTABLE_NAME}-windows-arm64.exe"
+          
+          # 构建
+          go build -tags=embed_font -trimpath -ldflags="-s -w" -o "${OUTPUT_FILE}" ./cmd
+          
+          # 将输出文件名保存为步骤输出，供后续步骤使用
+          echo "OUTPUT_FILE=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
+          
+          # 清理资源文件（如果存在）
+          rm -f rsrc_windows_*.syso 2>/dev/null || true
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.OUTPUT_FILE }}
+          path: ${{ steps.build.outputs.OUTPUT_FILE }}
+          retention-days: 1
+  
   build-macos:
     name: Build macOS
     runs-on: macos-latest
@@ -353,7 +452,7 @@ jobs:
   
   release:
     name: Create Release
-    needs: [build-linux-windows, build-macos]
+    needs: [build-linux-windows, build-windows-arm64, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
