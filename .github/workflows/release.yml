@@ -43,6 +43,7 @@ jobs:
             libxinerama-dev \
             libxcursor-dev \
             libxi-dev \
+            libxxf86vm-dev \
             pkg-config
       
       - name: Extract app info
@@ -135,6 +136,7 @@ jobs:
                 libxinerama-dev \
                 libxcursor-dev \
                 libxi-dev \
+                libxxf86vm-dev \
                 pkg-config \
                 gcc && \
               go build -buildvcs=false -tags=embed_font -trimpath -ldflags='-s -w' -o ${OUTPUT_FILE} ./cmd && \
