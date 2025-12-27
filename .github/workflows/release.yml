@@ -526,8 +526,8 @@ jobs:
                 # 将 .app 目录打包成 zip 文件
                 appname=$(basename "$app_dir")
                 zipname="${appname}.zip"
-                # 切换到 artifact 目录进行打包，使用绝对路径指定输出文件
-                (cd "$artifact_dir" && zip -r "${RELEASE_DIR}/${zipname}" "$appname" -q)
+                # 从 .app 目录的父目录打包，确保包含完整的 .app 目录结构
+                (cd "$(dirname "$app_dir")" && zip -r "${RELEASE_DIR}/${zipname}" "$appname" -q)
                 echo "Created zip: ${zipname}"
               else
                 # 复制其他文件（Linux 和 Windows 可执行文件）
