@@ -373,8 +373,8 @@ jobs:
           BUNDLE_ID="${{ steps.app_info.outputs.BUNDLE_ID }}"
           EXECUTABLE_NAME="${{ steps.app_info.outputs.EXECUTABLE_NAME }}"
           
-          # 生成 .app 名称（应用名称-架构.app）
-          APP_BUNDLE_NAME="${APP_NAME}-${{ matrix.goarch }}.app"
+          # 生成 .app 名称（使用可执行文件名-架构.app）
+          APP_BUNDLE_NAME="${EXECUTABLE_NAME}-darwin-${{ matrix.goarch }}.app"
           
           # 创建 .app 目录结构
           mkdir -p "${APP_BUNDLE_NAME}/Contents/MacOS"
@@ -472,10 +472,10 @@ jobs:
           EXECUTABLE_NAME="${{ steps.release_info.outputs.EXECUTABLE_NAME }}"
           TAG_NAME="${{ steps.tag.outputs.tag }}"
           
-          # 生成文件名
+          # 生成文件名（统一使用 EXECUTABLE_NAME）
           WIN_AMD64="${EXECUTABLE_NAME}-windows-amd64.exe"
-          MACOS_AMD64="${APP_NAME}-amd64.app"
-          MACOS_ARM64="${APP_NAME}-arm64.app"
+          MACOS_AMD64="${EXECUTABLE_NAME}-darwin-amd64.app.zip"
+          MACOS_ARM64="${EXECUTABLE_NAME}-darwin-arm64.app.zip"
           LINUX_AMD64="${EXECUTABLE_NAME}-linux-amd64"
           LINUX_ARM64="${EXECUTABLE_NAME}-linux-arm64"
           
@@ -487,8 +487,8 @@ jobs:
           | 平台 | 架构 | 文件名 | 使用方法 |
           |------|------|--------|---------|
           | Windows | amd64 | \`${WIN_AMD64}\` | 双击运行，首次需允许权限 |
-          | macOS | amd64 | \`${MACOS_AMD64}\` | 双击打开，首次需在系统设置中允许 |
-          | macOS | arm64 | \`${MACOS_ARM64}\` | 双击打开，首次需在系统设置中允许 |
+          | macOS | amd64 | \`${MACOS_AMD64}\` | 下载后解压，双击 .app 打开，首次需在系统设置中允许 |
+          | macOS | arm64 | \`${MACOS_ARM64}\` | 下载后解压，双击 .app 打开，首次需在系统设置中允许 |
           | Linux | amd64 | \`${LINUX_AMD64}\` | \`chmod +x\` 后运行，GUI 模式默认，CLI 模式加 \`--cli\` |
           | Linux | arm64 | \`${LINUX_ARM64}\` | \`chmod +x\` 后运行，GUI 模式默认，CLI 模式加 \`--cli\` |
           
@@ -507,9 +507,15 @@ jobs:
           # 显示生成的 release notes
           cat release_notes.md
       
+      - name: Install zip utility
+        run: |
+          # 确保 zip 工具已安装
+          sudo apt-get update && sudo apt-get install -y zip
+      
       - name: Prepare release files
         run: |
           mkdir -p ./release
+          RELEASE_DIR="$(pwd)/release"
           
           # 遍历所有 artifact 目录
           for artifact_dir in ./artifacts/*/; do
@@ -517,10 +523,12 @@ jobs:
               # 检查是否是 .app 目录
               app_dir=$(find "$artifact_dir" -maxdepth 1 -type d -name "*.app" | head -1)
               if [ -n "$app_dir" ]; then
-                # 复制 .app 目录
+                # 将 .app 目录打包成 zip 文件
                 appname=$(basename "$app_dir")
-                cp -R "$app_dir" "./release/$appname"
-                echo "Copied .app bundle: $appname"
+                zipname="${appname}.zip"
+                # 切换到 artifact 目录进行打包，使用绝对路径指定输出文件
+                (cd "$artifact_dir" && zip -r "${RELEASE_DIR}/${zipname}" "$appname" -q)
+                echo "Created zip: ${zipname}"
               else
                 # 复制其他文件（Linux 和 Windows 可执行文件）
                 find "$artifact_dir" -type f | while read file; do
@@ -533,15 +541,15 @@ jobs:
           done
           
           # 为 Linux 文件添加执行权限（使用通配符匹配所有 Linux 可执行文件）
-          find ./release -type f ! -name "*.exe" ! -name "*.app" -exec chmod +x {} \; 2>/dev/null || true
+          find ./release -type f ! -name "*.exe" ! -name "*.zip" -exec chmod +x {} \; 2>/dev/null || true
           
           # 显示收集到的文件
           echo ""
           echo "=== Release files ==="
           ls -lh ./release/
           echo ""
-          echo "=== .app bundles ==="
-          find ./release -name "*.app" -type d -exec du -sh {} \;
+          echo "=== .app bundles (as zip) ==="
+          find ./release -name "*.zip" -exec ls -lh {} \;
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
